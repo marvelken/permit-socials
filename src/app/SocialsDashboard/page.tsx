@@ -1,13 +1,31 @@
 'use client'
 
-import { useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import Header from './../../components/Header';
-import { MessageSquare, BarChart2, Users } from 'lucide-react';
+import Header from '@/components/Header';
+import ManagerModal from '@/components/ManagerModal';
+import { MessageSquare, BarChart2, Users, UserPlus } from 'lucide-react';
+import { createClient } from '../../../utils/supabase/client';
 
 export default function SocialsDashboard() {
   const router = useRouter();
+  const [isManagerModalOpen, setIsManagerModalOpen] = useState(false);
+  const [user, setUser] = useState(null);
+  const supabase = createClient();
+
+  useEffect(() => {
+    const checkUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        router.push('/login-register');
+        return;
+      }
+      setUser(user);
+    };
+
+    checkUser();
+  }, [supabase, router]);
 
   return (
     <div className="flex flex-col min-h-screen bg-gray-50">
@@ -65,11 +83,13 @@ export default function SocialsDashboard() {
                 Create a New Post
               </button>
             </Link>
-            <Link href="/posts">
-              <button className="w-full py-3 px-4 bg-amber-600 rounded-md text-white hover:bg-amber-700 transition-colors">
-                View Recent Activity
-              </button>
-            </Link>
+            <button 
+              onClick={() => setIsManagerModalOpen(true)}
+              className="w-full py-3 px-4 bg-amber-600 rounded-md text-white hover:bg-amber-700 transition-colors flex items-center justify-center"
+            >
+              <UserPlus className="mr-2" size={18} />
+              Employ Content Managers
+            </button>
           </div>
         </div>
         
@@ -127,6 +147,9 @@ export default function SocialsDashboard() {
           </ol>
         </div>
       </main>
+      
+      {/* Manager Modal */}
+      <ManagerModal isOpen={isManagerModalOpen} onClose={() => setIsManagerModalOpen(false)} />
       
       <footer className="bg-white border-t border-gray-200 py-6">
         <div className="container mx-auto px-4">
