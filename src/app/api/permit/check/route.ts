@@ -18,7 +18,7 @@ const checkPermissionCached = unstable_cache(
     }
   },
   ['permit-check'],
-  { revalidate: 60 * 10 } // Cache for 10 minutes
+  { revalidate: 60 * 1 } // Cache for 10 minutes
 );
 
 export async function POST(request: Request) {

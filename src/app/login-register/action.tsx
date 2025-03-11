@@ -34,13 +34,15 @@ export async function login(formData: FormData) {
         const permissions = await checkSocialMediaPermissions(userData.user.id)
         console.log('User Permissions:', permissions) // Debug permissions
 
-        if (permissions.canView) {
+        if (permissions.canView && permissions.canRespondToComments || permissions.canView && permissions.canCreatePosts) {
+            redirect('/manager-dashboard')
+        } else if (permissions.canRespondToComments & permissions.canCreatePosts & permissions.canViewAnalytics) {
             redirect('/SocialsDashboard')
-        } 
+        }
         
     }
 
-    redirect('/selectRole')
+    redirect('/SocialsDashboard')
 }
 
 export async function signup(formData: FormData) {
@@ -110,7 +112,16 @@ export async function selectRole(formData: FormData) {
     }
 
     // Redirect based on role
-    if(role){
-        redirect('/SocialsDashboard')
+    switch (role) {
+        case 'account-owner':
+            redirect('/SocialsDashboard')
+        case 'content-manager':
+            redirect('/manager-dashboard')
+        case 'engagement-specialist':
+            redirect('/manager-dashboard')
+        case 'analytics-viewer':
+            redirect('/manager-dashboard')
+        default:
+            redirect('/SocialsDashboard')
     }
 }

@@ -1,62 +1,120 @@
 'use client'
 
-import { useState } from 'react'
-import { Loader2, X, Check, UserPlus } from 'lucide-react'
+import { useState, FormEvent } from 'react'
+import { UserPlus, X, Mail, Loader2, Check } from 'lucide-react'
 import { createClient } from '../../utils/supabase/client'
 
 interface ManagerModalProps {
-  isOpen: boolean
-  onClose: () => void
+  isOpen: boolean;
+  onClose: () => void;
 }
 
 export default function ManagerModal({ isOpen, onClose }: ManagerModalProps) {
   const [email, setEmail] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState<string | null>(null)
-  const supabase = createClient()
-
+  const [success, setSuccess] = useState(false)
+  const [debugInfo, setDebugInfo] = useState<any>(null)
+  
   if (!isOpen) return null
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleAddManager = async (e: FormEvent) => {
     e.preventDefault()
-    setIsLoading(true)
+    setSubmitting(true)
     setError(null)
-    setSuccess(null)
+    setSuccess(false)
+    setDebugInfo(null)
 
     try {
-      // 1. Check if the email is valid
-      if (!email || !email.includes('@')) {
-        throw new Error('Please enter a valid email address')
+      const supabase = createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+
+      if (!user) {
+        throw new Error('Not authenticated')
       }
 
-      // 2. Check if the user exists in Supabase Auth
-      const { data: userData, error: userError } = await supabase
+      // Step 1: Check if the account_access table exists
+      console.log("Checking account_access table")
+      const { error: tableCheckError } = await supabase
+        .from('account_access')
+        .select('id')
+        .limit(1)
+      
+      if (tableCheckError) {
+        console.error("Error checking account_access table:", tableCheckError)
+        setDebugInfo({ tableCheckError })
+        throw new Error('The account_access table might not be set up correctly. Please check console for details.')
+      }
+
+      // Step 2: Check if relationship already exists
+      console.log("Checking for existing relationship")
+      const { data: existingAccess, error: checkError } = await supabase
+        .from('account_access')
+        .select('*')
+        .eq('account_owner_id', user.id)
+        .eq('manager_email', email.toLowerCase())
+        .maybeSingle()
+
+      if (checkError) {
+        console.error("Error checking existing access:", checkError)
+        setDebugInfo({ checkError })
+        throw new Error('Error checking existing relationship. Please check console for details.')
+      }
+
+      if (existingAccess) {
+        throw new Error('You already have a manager relationship with this email')
+      }
+
+      // Step 3: Try to find the user ID if possible
+      console.log("Looking up user profile")
+      const { data: profileData, error: profileError } = await supabase
         .from('profiles')
-        .select('id, email, full_name')
-        .eq('email', email)
-        .single()
+        .select('id')
+        .ilike('email', email)
+        .maybeSingle()
 
-      if (userError) {
-        // User doesn't exist in the system
-        throw new Error('This user is not registered in the system yet. Please invite them to sign up first.')
+      if (profileError) {
+        console.log("Profile lookup error (non-fatal):", profileError)
       }
 
-      // 3. Send an invitation email (this would require a server function)
-      // For now, just display success message
-      setSuccess(`Successfully added ${userData.full_name || email} as a Content Manager`)
-      setEmail('')
+      console.log("Found profile:", profileData)
 
-      // Close modal after 3 seconds of success
+      // Step 4: Create new account access record with minimal required fields
+      console.log("Creating account access record")
+      const insertData = {
+        account_owner_id: user.id,
+        manager_email: email.toLowerCase(),
+        access_level: 'content-manager'
+      }
+
+      // Only add manager_id if we found a profile
+      if (profileData?.id) {
+        insertData['manager_id'] = profileData.id
+      }
+
+      console.log("Insert data:", insertData)
+      
+      const { error: accessError } = await supabase
+        .from('account_access')
+        .insert([insertData])
+
+      if (accessError) {
+        console.error('Error inserting record:', accessError)
+        setDebugInfo({ insertData, accessError })
+        throw new Error(`Database error: ${accessError.message || 'Unknown error'}`)
+      }
+
+      setSuccess(true)
+      setEmail('')
       setTimeout(() => {
         onClose()
-        setSuccess(null)
-      }, 3000)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add manager')
+      }, 2000)
+
+    } catch (err: any) {
       console.error('Error adding manager:', err)
+      setError(err.message || 'Failed to add manager')
     } finally {
-      setIsLoading(false)
+      setSubmitting(false)
     }
   }
 
@@ -66,7 +124,7 @@ export default function ManagerModal({ isOpen, onClose }: ManagerModalProps) {
         <button 
           onClick={onClose}
           className="absolute top-4 right-4 text-gray-500 hover:text-gray-700"
-          disabled={isLoading}
+          disabled={submitting}
         >
           <X size={20} />
         </button>
@@ -78,7 +136,8 @@ export default function ManagerModal({ isOpen, onClose }: ManagerModalProps) {
           </h2>
           
           <p className="text-gray-600 mb-6">
-            Add a user who is already registered in the system as a Content Manager. They'll have access based on their assigned role during registration.
+            Add someone who can create posts and reply to comments on your behalf. 
+            Enter their email address below.
           </p>
           
           {error && (
@@ -90,28 +149,35 @@ export default function ManagerModal({ isOpen, onClose }: ManagerModalProps) {
           {success && (
             <div className="p-3 mb-4 bg-green-50 border border-green-200 text-green-700 rounded-md text-sm flex items-center">
               <Check size={16} className="mr-2" />
-              {success}
+              Successfully added manager!
             </div>
           )}
           
-          <form onSubmit={handleSubmit}>
+          {debugInfo && (
+            <div className="p-3 mb-4 bg-gray-50 border border-gray-200 rounded-md overflow-auto max-h-40">
+              <p className="text-xs font-mono">Debug Info:</p>
+              <pre className="text-xs font-mono mt-1">{JSON.stringify(debugInfo, null, 2)}</pre>
+            </div>
+          )}
+          
+          <form onSubmit={handleAddManager}>
             <div className="mb-4">
               <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
                 Email address
               </label>
-              <input
-                type="email"
-                id="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="manager@example.com"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-amber-500 focus:border-amber-500"
-                disabled={isLoading}
-                required
-              />
-              <p className="mt-1 text-sm text-gray-500">
-                The person must already be registered in the system.
-              </p>
+              <div className="relative">
+                <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={18} />
+                <input
+                  type="email"
+                  id="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="manager@example.com"
+                  className="w-full px-3 py-2 pl-10 border border-gray-300 rounded-md focus:ring-amber-500 focus:border-amber-500"
+                  disabled={submitting}
+                  required
+                />
+              </div>
             </div>
             
             <div className="flex justify-end">
@@ -119,19 +185,19 @@ export default function ManagerModal({ isOpen, onClose }: ManagerModalProps) {
                 type="button"
                 onClick={onClose}
                 className="mr-3 px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50"
-                disabled={isLoading}
+                disabled={submitting}
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 className="px-4 py-2 bg-amber-600 text-white rounded-md hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-amber-500 disabled:bg-amber-400 flex items-center"
-                disabled={isLoading}
+                disabled={submitting}
               >
-                {isLoading ? (
+                {submitting ? (
                   <>
                     <Loader2 className="mr-2 animate-spin" size={18} />
-                    Processing...
+                    Adding...
                   </>
                 ) : (
                   'Add Manager'

@@ -2,9 +2,10 @@
 
 import { useState, useEffect, use } from "react";
 import { createClient } from "../../../../utils/supabase/client";
-import { useRouter } from "next/navigation";
-import { Loader2, Send, ArrowLeft, MessageSquare } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Loader2, Send, ArrowLeft, MessageSquare, UserCog } from "lucide-react";
 import Header from "@/components/Header";
+import Link from "next/link";
 
 export default function PostDetail({ params }) {
   // Properly unwrap params
@@ -16,8 +17,14 @@ export default function PostDetail({ params }) {
   const [replyTo, setReplyTo] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [user, setUser] = useState(null);
+  const [ownerProfile, setOwnerProfile] = useState(null);
+  const [isManagerMode, setIsManagerMode] = useState(false);
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = createClient();
+
+  // Get account ID from URL query parameter
+  const accountId = searchParams.get("accountId");
 
   useEffect(() => {
     // Check if user is authenticated
@@ -30,6 +37,27 @@ export default function PostDetail({ params }) {
         return;
       }
       setUser(user);
+
+      // Check if we're in manager mode
+      const inManagerMode = accountId && accountId !== user.id;
+      setIsManagerMode(inManagerMode);
+
+      if (inManagerMode) {
+        // Fetch owner profile if in manager mode
+        const { data: ownerData, error: ownerError } = await supabase
+          .from("profiles")
+          .select("full_name, email")
+          .eq("id", accountId)
+          .maybeSingle();
+
+        if (!ownerError && ownerData) {
+          setOwnerProfile(ownerData);
+        } else {
+          setOwnerProfile({
+            full_name: `Account (${accountId.slice(0, 8)}...)`,
+          });
+        }
+      }
     };
 
     // Fetch post and comments
@@ -64,7 +92,20 @@ export default function PostDetail({ params }) {
 
         console.log("Author profile:", authorProfile);
 
-        // Step 3: Fetch all comments for this post
+        // Step 3: Fetch the post owner's profile (might be different from author)
+        const { data: ownerProfile, error: ownerError } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", postData.owner_id)
+          .single();
+
+        if (ownerError) {
+          console.error("Error fetching owner profile:", ownerError);
+        }
+
+        console.log("Owner profile:", ownerProfile);
+
+        // Step 4: Fetch all comments for this post
         let commentsData = [];
         const { data, error: commentsError } = await supabase
           .from("comments")
@@ -80,7 +121,7 @@ export default function PostDetail({ params }) {
 
         console.log("Comments data:", commentsData);
 
-        // Step 4: Fetch profiles for all comment authors
+        // Step 5: Fetch profiles for all comment authors
         const commentUserIds = [
           ...new Set(commentsData.map((comment) => comment.user_id)),
         ];
@@ -101,7 +142,7 @@ export default function PostDetail({ params }) {
 
         console.log("Comment profiles:", commentProfiles);
 
-        // Step 5: Combine comments with their author profiles
+        // Step 6: Combine comments with their author profiles
         const enrichedComments = commentsData.map((comment) => {
           const profile = commentProfiles.find((p) => p.id === comment.user_id);
           return {
@@ -111,7 +152,7 @@ export default function PostDetail({ params }) {
           };
         });
 
-        // Step 6: Organize comments into a tree structure (top-level and replies)
+        // Step 7: Organize comments into a tree structure (top-level and replies)
         const topLevelComments = enrichedComments.filter(
           (comment) => !comment.parent_comment_id
         );
@@ -129,10 +170,11 @@ export default function PostDetail({ params }) {
           }
         });
 
-        // Create the complete post object with author and comments
+        // Create the complete post object with author, owner, and comments
         const completePost = {
           ...postData,
           profile: authorProfile || null,
+          ownerProfile: ownerProfile || null,
           comments: topLevelComments,
         };
 
@@ -163,7 +205,7 @@ export default function PostDetail({ params }) {
     return () => {
       commentsSubscription.unsubscribe();
     };
-  }, [id, supabase, router]);
+  }, [id, accountId, supabase, router, searchParams]);
 
   const addComment = async (e) => {
     e.preventDefault();
@@ -172,20 +214,29 @@ export default function PostDetail({ params }) {
     setIsLoading(true);
 
     try {
-      // No permission check for now
+      // Determine the owner_id (whose account the comment belongs to)
+      const ownerId = accountId || user.id;
+
+      console.log("Creating comment as user", user.id, "for owner", ownerId);
+
       const { error } = await supabase.from("comments").insert({
         post_id: id,
-        user_id: user.id,
+        user_id: user.id, // Who created the comment
+        owner_id: ownerId, // Whose account it belongs to
         content: commentContent,
         parent_comment_id: replyTo,
       });
 
-      if (error) throw error;
+      if (error) {
+        console.error("Error details:", error);
+        throw error;
+      }
 
       setCommentContent("");
       setReplyTo(null);
     } catch (error) {
       console.error("Error adding comment:", error);
+      alert("Failed to add comment: " + (error.message || "Unknown error"));
     } finally {
       setIsLoading(false);
     }
@@ -208,9 +259,32 @@ export default function PostDetail({ params }) {
     <div className="flex flex-col min-h-screen bg-gray-50">
       <Header />
 
+      {/* Manager Mode Banner */}
+      {isManagerMode && ownerProfile && (
+        <div className="bg-amber-50 border-b border-amber-200">
+          <div className="container mx-auto px-4 py-2 flex items-center">
+            <UserCog className="text-amber-600 mr-2" size={20} />
+            <p className="text-amber-800">
+              <span className="font-medium">Manager Mode:</span> You are
+              managing comments for {ownerProfile.full_name}.
+            </p>
+            <Link
+              href="/manager-dashboard"
+              className="ml-auto text-sm text-amber-700 hover:text-amber-800"
+            >
+              Switch Account
+            </Link>
+          </div>
+        </div>
+      )}
+
       <main className="flex-grow container mx-auto px-4 py-8">
         <button
-          onClick={() => router.push("/posts")}
+          onClick={() =>
+            router.push(
+              isManagerMode ? `/posts?accountId=${accountId}` : "/posts"
+            )
+          }
           className="flex items-center text-amber-600 hover:text-amber-700 mb-6"
         >
           <ArrowLeft size={16} className="mr-1" />
@@ -222,7 +296,22 @@ export default function PostDetail({ params }) {
           <div className="flex justify-between items-start mb-4">
             <div>
               <h3 className="font-medium">
-                {!post.profile && ` User ID: ${post.user_id.slice(0, 8)}...`}
+                {/* Show post ownership information */}
+                {post.ownerProfile?.full_name ||
+                  post.profile?.full_name ||
+                  "Account Owner"}
+
+                {/* If the creator is different from the owner, show that information */}
+                {post.user_id !== post.owner_id && post.profile && (
+                  <span className="text-sm text-gray-500 ml-2">
+                    (Posted by: {post.profile.full_name})
+                  </span>
+                )}
+
+                {/* Fallback if no profiles found */}
+                {!post.ownerProfile &&
+                  !post.profile &&
+                  ` (ID: ${post.owner_id.slice(0, 8)}...)`}
               </h3>
               <p className="text-sm text-gray-500">
                 {new Date(post.created_at).toLocaleString()}
@@ -238,7 +327,13 @@ export default function PostDetail({ params }) {
           className="mb-8 bg-white p-4 rounded-lg shadow"
         >
           <h2 className="text-xl font-semibold mb-4">
-            {replyTo ? "Reply to Comment" : "Add a Comment"}
+            {replyTo
+              ? isManagerMode
+                ? `Reply as ${ownerProfile?.full_name || "Account Owner"}`
+                : "Reply to Comment"
+              : isManagerMode
+              ? `Comment as ${ownerProfile?.full_name || "Account Owner"}`
+              : "Add a Comment"}
           </h2>
           {replyTo && (
             <div className="mb-3 p-3 bg-amber-50 rounded-md flex justify-between items-center">
@@ -273,6 +368,7 @@ export default function PostDetail({ params }) {
               <>
                 <Send className="mr-2" size={18} />
                 {replyTo ? "Reply" : "Comment"}
+                {isManagerMode && ` as ${ownerProfile?.full_name || "Owner"}`}
               </>
             )}
           </button>
@@ -327,10 +423,11 @@ export default function PostDetail({ params }) {
                       <div key={reply.id} className="bg-gray-50 rounded-md p-4">
                         <div className="flex justify-between items-start mb-2">
                           <div>
-                            <h4 className="font-medium text-sm">
-                              
-                              {!reply.profile &&
-                                ` User ID: ${reply.user_id.slice(0, 8)}...`}
+                            <h4 className="font-medium">
+                              {/* Show the account owner's name (not the creator's) */}
+                              {ownerProfile?.full_name || "Account Owner"}
+                              {/* Optional: show who created it */}
+                              {post.owner_id }
                             </h4>
                             <p className="text-xs text-gray-500">
                               {new Date(reply.created_at).toLocaleString()}
